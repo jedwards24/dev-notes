@@ -1,0 +1,192 @@
+---
+title: "Refactoring find_similar()"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(bench)
+library(dplyr)
+library(kableExtra)
+library(edwards)
+```
+
+## Introduction
+
+This is a function to compare columns pairwise of one or two data frames, returning simple measures of similarity (rowwise comparison of elements). I do not use it often and I was planning to move it from edwards to jemisc, but when I looked at the code there was obviously room for improvement.
+
+I was not looking to improve speed since I do not use it much, but it can be slow with larger data frames so it would help. I will give all timing results at the end.
+
+The function covered is `find_similar_single()` which is the version which compares columns within a single dataframe, but I will make similar changes to the two dataframe version.
+
+## The Function Versions
+
+The original version shown next builds the output by directly assigned values to a pre-built blank tibble. I found it long and cluttered and there seemed to be some obvious inefficiencies where some values could be assigned outside of the inner loop as vectors rather than individual values. There were other bits which I would not do now, such as using `sapply()` and `table()`.
+
+```{r f1}
+find_similar_single <- function(df){
+  classes <- sapply(df, function(x) class(x)[1])
+  counts <- table(classes)
+  sz <- sum(counts * (counts - 1) / 2)
+  res <- tibble::tibble(var1 = NA_character_,
+                        var2 = NA_character_,
+                        class = NA_character_,
+                        match = NA_integer_,
+                        match_zero = NA_integer_,
+                        both_na = NA_integer_,
+                        na_1 = NA_integer_,
+                        na_2 = NA_integer_,
+                        .rows = sz
+  )
+  nm <- names(df)
+  nvar <- length(nm)
+  k <- 1
+  for (i in 1 : (nvar - 1)){
+    x <- dplyr::pull(df, nm[i])
+    indsj <- which(classes[i] == classes) %>% .[. > i]
+    for (j in indsj){
+      y <- dplyr::pull(df, nm[j])
+      res[k, 1] <- nm[i]
+      res[k, 2] <- nm[j]
+      res[k, 3] <- classes[i]
+      res[k, 4] <- sum(x == y, na.rm = T)
+      res[k, 5] <- sum(x == 0 & y == 0, na.rm = T)
+      res[k, 6] <- sum(is.na(x) & is.na(y))
+      res[k, 7] <- sum(is.na(x) & !is.na(y))
+      res[k, 8] <- sum(!is.na(x) & is.na(y))
+      k <- k + 1
+    }
+  }
+  res %>%
+    dplyr::mutate(diff = nrow(df) - match - both_na - na_1 - na_2) %>%
+    dplyr::mutate(prop_match_nz = (match - match_zero) / (nrow(df) - match_zero - both_na - na_1 - na_2))
+}
+```
+
+I separated the inner loop to helper function which created a one row tibble which were assigned to a list and combined at the end. Although easy to read, it was slightly slower than the original due to the many calls to create tibbles.
+
+```{r f2}
+find_similar_single2 <- function(df){
+  classes <- purrr::map_chr(df, class) %>%
+    unname()
+  nm <- names(df)
+  niter <- length(nm) - 1
+  res_list <- vector("list", niter)
+  for (i in 1 : niter){
+    x <- dplyr::pull(df, i)
+    inds_y <- which(classes[i] == classes) %>% .[. > i]
+    res_list[[i]] <- purrr::map_dfr(inds_y, ~similar_col_single2(x, df[[.]], names(df)[.])) %>%
+      dplyr::mutate(var1 = nm[i]) %>%
+      dplyr::mutate(class = classes[i])
+  }
+    dplyr::bind_rows(res_list) %>%
+      dplyr::select(var1, var2, class, everything()) %>%
+      dplyr::mutate(diff = nrow(df) - match - both_na - na_1 - na_2) %>%
+      dplyr::mutate(prop_match_nz = (match - match_zero) / (nrow(df) - match_zero - both_na - na_1 - na_2))
+}
+
+similar_col_single2 <- function(x, y, name_y) {
+  tibble::tibble(var2 = name_y,
+                 match = sum(x == y, na.rm = T),
+                 match_zero = sum(x == 0 & y == 0, na.rm = T),
+                 both_na = sum(is.na(x) & is.na(y)),
+                 na_1 = sum(is.na(x) & !is.na(y)),
+                 na_2 = sum(!is.na(x) & is.na(y)))
+}
+```
+
+The next version kept the same structure but replaced the tibble in the helper with a numeric vector (the one non-numeric value was moved to the outer loop). This were combined into a matrix and then converted to a tibble. This was 4 times as fast as the previous function and 3x the original.
+
+```{r f3}
+find_similar_single3 <- function(df){
+  classes <- purrr::map_chr(df, class) %>%
+    unname()
+  nm <- names(df)
+  niter <- length(nm) - 1
+  res_list <- vector("list", niter)
+  for (i in 1 : niter){
+    x <- dplyr::pull(df, i)
+    inds_y <- which(classes[i] == classes) %>% .[. > i]
+    if (length(inds_y) == 0) next()
+    res_mat <- purrr::map(inds_y, ~similar_col_single3(x, df[[.]])) %>%
+      do.call(rbind, .)
+    colnames(res_mat) <- c("match", "match_zero", "both_na", "na_1", "na_2")
+    res_list[[i]] <- as_tibble(res_mat) %>%
+      dplyr::mutate(var1 = nm[i]) %>%
+      dplyr::mutate(var2 = nm[inds_y]) %>%
+      dplyr::mutate(class = classes[i])
+  }
+  dplyr::bind_rows(res_list) %>%
+    dplyr::select(var1, var2, class, everything()) %>%
+    dplyr::mutate(diff = nrow(df) - match - both_na - na_1 - na_2) %>%
+    dplyr::mutate(prop_match_nz = (match - match_zero) / (nrow(df) - match_zero - both_na - na_1 - na_2))
+}
+
+similar_col_single3 <- function(x, y) {
+  c(sum(x == y, na.rm = T),
+    sum(x == 0 & y == 0, na.rm = T),
+    sum(is.na(x) & is.na(y)),
+    sum(is.na(x) & !is.na(y)),
+    sum(!is.na(x) & is.na(y)))
+}
+```
+
+Having come this far I now confronted the obvious issue of calculating one values for a row at a time for much of the output with no attempt to vectorise. This removed the inner loop so I created the tibble for the block directly which removed the matrix steps. This would have looked okay without the separate helper, but much of the code could be reused when I came to rewrite `find_similar()` for comparing two data frames so I put that part, which compares a vector against each column in a dataframe, in a separate function. This final function was the fastest, but its main advantage was in a simpler design without any unusual steps added for speed.
+
+```{r f4}
+find_similar_single4 <- function(df){
+  classes <- purrr::map_chr(df, class)
+  niter <- ncol(df) - 1
+  res_list <- vector("list", niter)
+  for (i in 1 : niter){
+    inds_y <- which(classes[i] == classes) %>% .[. > i]
+    if (length(inds_y) == 0) next()
+    x <- dplyr::pull(df, i)
+    df_y <- dplyr::select(df, all_of(inds_y))
+    res_list[[i]] <- compare_cols_to_vector(x, df_y, names(df)[i])
+  }
+  dplyr::bind_rows(res_list) %>%
+    dplyr::mutate_all(unname) %>%
+    dplyr::mutate(diff = nrow(df) - match - both_na - na_1 - na_2) %>%
+    dplyr::mutate(prop_match_nz = (match - match_zero) / (nrow(df) - match_zero - both_na - na_1 - na_2))
+}
+
+compare_cols_to_vector <- function(x, df_y, name_x) {
+  match <- purrr::map_int(df_y, ~sum(. == x, na.rm = TRUE))
+  match_zero <- purrr::map_int(df_y, ~sum(x == 0 & . == 0, na.rm = TRUE))
+  both_na <- purrr::map_int(df_y, ~sum(is.na(x) & is.na(.)))
+  na_1 <- purrr::map_int(df_y, ~sum(is.na(x) & !is.na(.)))
+  na_2 <- purrr::map_int(df_y, ~sum(!is.na(x) & is.na(.)))
+  tibble::tibble(var1 = name_x,
+                 var2 = names(df_y),
+                 class = class(x),
+                 match,
+                 match_zero,
+                 both_na,
+                 na_1,
+                 na_2)
+}
+```
+
+## Benchmarking Results
+
+I originally used a small example to test timings, but speed is only important when there are a reasonable number of columns in the input. The test dataset has 100 rows and 30 columns which gives 435 rows in the output. There are 29 steps in the outer loop with blocks of 29, 28, ..., 1 in the inner.
+
+```{r test_df}
+dt <- matrix(rpois(3000, 1), ncol = 30) %>%
+  as_tibble()
+```
+
+```{r bm, echo = FALSE}
+bm <- mark(f1 = find_similar_single(dt),
+           f2 = find_similar_single2(dt),
+           f3 = find_similar_single3(dt),
+           f4 = find_similar_single4(dt),
+           min_iterations = 10)
+bm %>% 
+  select(-c(result, memory, time, gc)) %>% 
+  my_kable()
+ggplot2::autoplot(bm)
+```
+
+The results include GC collections because each iteration had these. The memory allocation for the original function is larger than the others and I am not sure why this happens. When longer data inputs are used it becomes relatively smaller, still adding a fixed amount of about 8Mb. It might be something about assigning directly to tibble cells.
