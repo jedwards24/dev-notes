@@ -1,0 +1,105 @@
+---
+title: "Type Conversion"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This came up in writing a function to check which data columns could be changed to a simpler type (character -> double -> integer -> logical), without loss of information. It is more complicated than I hoped.
+
+For now, set conversions to logicals to one side. The difficult cases include:
+
+* Leading zeroes in strings e.g. "007", "0123". 
+* Strings such as "1.0" or "1.20".
+* Strings of numbers with leading currency symbols e.g. "£12.34"
+* Strings with commas or similar.
+* Doubles with integer numbers too large to be stored in 32 bit (absolute value > 2^53).
+* Small numerical tolerances when converting from doubles to integers.
+* Hexadecimal strings. I'd want these kept as characters. `as.double(0)` will coerce to double any hexadecimals starting with "0x" or "0X".
+
+## readr
+
+I could use `readr` functions [vignette](https://cran.r-project.org/web/packages/readr/vignettes/readr.html).
+
+* The `parse_*()` family parse a character vector as the supplied type (`parse_integer()` will attempt to parse as an integer). Elements that cannot be read will be `NA` with a warning. 
+* `parse_guess()` will guess the type (character will always work).
+* `parse_integer()` and `parse_double()` are strict: the input string must be a single number with no leading or trailing characters. 
+* `parse_number()` ignores _any_ non-numeric prefixes and suffixes and will deal with grouping marks.
+* `guess_parser()` guesses the which parser should be used to parse the vector. Guesses are strict (do not ignore prefixes and suffixes). By default it will not return an integer guess but this can be changed with the `guess_integer()` argument.
+* `type_convert()` converts columns in a similar way to the `read_*()` functions but with a data frame input.
+* `spec()` returns the column specification of a data frame that has been read in by readr. `cols_condense()` converts a spec object so that the most common column type is set as the default value. 
+* The spec can be converted to a `col_types` argument string using `as.character(spec(x))`. Or set `col_types` directly to `spec()`.
+
+Integer conversion is handled with Rcpp code(I think). 
+
+## Integers
+
+Checking whether a double is an integer is not straightforward.
+
+Integers are stored with 32-bits which limits the range of whole numbers that can be stored (up to 2^31-1). A double should be able to represent magnitudes up to 2^53 [https://win-vector.com/2015/06/08/r-in-a-64-bit-world/](https://win-vector.com/2015/06/08/r-in-a-64-bit-world/). That article suggests the following function:
+
+Outside of [-2^31+1, 2^31-1], `as.integer()` returns `NA` with warning "NAs introduced by coercion to integer range". Mathematical operations that transform an integer outside of this range appear to change the type to double.
+
+```{r}
+x <- as.integer(2^31-1)
+typeof(x)
+typeof(x + 1)
+```
+
+`as.integer()` truncates towards zero (as in `trunc()`):
+
+```{r}
+as.integer(9.99999)
+as.integer(-9.99999)
+as.integer(10-1E-20) # part below tolerance is ignored
+```
+
+Machine precision related surprises:
+
+```{r}
+x <- 1/(1-0.98)
+x
+as.integer(x)
+sprintf("%.20g", x)
+```
+
+Relevant functions:
+
+* `dplyr::near()`. Alternative to `==` which has an explicit tolerance argument.
+* `rlang::is_integerish()`. Checks if a number is integer like with a tolerance check (using the C library). Large double values may be integerish but may still not be coercible to integer. 
+
+A few other suggested functions for checking integers from, respectively, the above win-vector blog,  `?is.integer()`, and a [stackoverflow thread](https://stackoverflow.com/questions/3476782/check-if-the-number-is-integer): 
+
+```
+is.int <- function(v) {
+  is.numeric(v) &
+    v>-2^53 & v<2^53 &
+    (floor(v)==ceiling(v))
+}
+```
+
+```
+is.wholenumber <- function(x, tol = .Machine$double.eps^0.5)  abs(x - round(x)) < tol
+```
+
+```
+check_integer <- function(x, tol = .Machine$double.eps^0.5) {
+  min(abs(c(x%%1, x%%1-1))) < tol
+}
+```
+
+## Logicals
+
+Coercion of numerics using `as.logical()` converts zero to `FALSE` and non-zeroes to `TRUE`.
+
+```{r}
+as.logical(0)
+as.logical(-0.00001)
+as.logical(1e-40)
+```
+
+Character strings `c("T", "TRUE", "True", "true")` are converted to `TRUE`, `c("F", "FALSE", "False", "false")` to `FALSE` , and all others as `NA`.
+
+Like integers, coercion of logical factors uses the factor levels.
