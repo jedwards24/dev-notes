@@ -1,5 +1,15 @@
 
 # simplify_columns() --------
+# UPDATE:
+# See type_conversion_notes
+# Current method does not parse "7.0" correctly.
+# Either manually remove trailing ".0" etc. or could use readr functions: `guess_parser()` and
+# `parse_number()`. Or could just ignore these as unusual case and fine left as character.
+# There are questions over "£1234" and "12,345" too.
+# rlang::is_integerish() might be good for integer checks for doubles (but check size too).
+#
+# Does this go in jemisc??
+#
 # Output is tibble with one row per column
 # Checks for:
 #  - character to numeric/integer.

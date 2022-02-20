@@ -29,31 +29,3 @@ For some functions, it is more about having a place to keep them rather than how
 
 DF comparison package. Write up full review of existing options first. Names: mirror, looking glass, ferret, dig, rabbit hole.
 
-## Functions to Add
-
-* DF comparison
-
-To edwards:
-
-* numeric summary
-* test transforms
-* group missing?
-* format_numeric()
-* str_total()?
-* key checking
-* column simplify checks
-* binomial smooth
-* qboxplot?
-* Cut midpoint and width cut
-* datetime validity checking
-* factor_to_logical()?...probably not needed - as.logical() seems for T/F factors. Not for 0/1 though.
-
-jemodel:
-
-* impute by group?
-* glmnet summaries
-* Many others (rough)
-
-jemisc
-
-* column ordering (dates first, then generalise?)
