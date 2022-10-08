@@ -4,7 +4,7 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, collapse = TRUE, comment="#>")
 ```
 
 This came up in writing a function to check which data columns could be changed to a simpler type (character -> double -> integer -> logical), without loss of information. It is more complicated than I hoped.
@@ -100,6 +100,16 @@ as.logical(-0.00001)
 as.logical(1e-40)
 ```
 
-Character strings `c("T", "TRUE", "True", "true")` are converted to `TRUE`, `c("F", "FALSE", "False", "false")` to `FALSE` , and all others as `NA`.
+Character strings `c("T", "TRUE", "True", "true")` are converted to `TRUE`, `c("F", "FALSE", "False", "false")` to `FALSE` , and all others as `NA`. This includes characters that are coerceable to numbers:
 
-Like integers, coercion of logical factors uses the factor levels.
+```{r}
+as.logical(c("0", "1"))
+```
+
+## Factors
+
+Conversion of factors with `as.numeric()`, `as.integer()` or `as.double()` uses the underlying integer representation, not the levels. To convert levels use `as.numeric(levels(x))[x]`, which is what I use inside `edwards::factor_to_numeric()`  [This thread](https://stackoverflow.com/questions/3418128/how-to-convert-a-factor-to-integer-numeric-without-loss-of-information) gave this as the best method.
+
+Conversion with `as.logical()` behaves differently because there is a `as.logical.factor()` method which acts on the factor levels. Levels in `c("T", "TRUE", "True", "true", "F", "FALSE", "False", "false")` are converted appropriately and anything else (including `"0"`, `"1"` levels etc.) is converted to `NA`. This is consistent with`as.logical()` behaviour on non-factors.
+
+If all levels are logical-type strings then `edwards::factor_to_numeric()` converts them to numeric via `as.numeric(as.logical())`. I'm unsure if this is appropriate or useful. 
