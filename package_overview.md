@@ -1,4 +1,4 @@
-# Package Overview Notes
+# Packages Overview Notes
 
 Planned functions to do and thoughts about what might go where.
 
